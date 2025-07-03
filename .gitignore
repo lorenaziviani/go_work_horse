@@ -1,0 +1,36 @@
+# Binários do Go
+/bin/
+/build/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Diretórios de dependências
+vendor/
+
+.gitconfig*
+git-switch.sh
+# Arquivos de configuração do Go
+.env
+.env.*
+
+# Arquivos temporários
+*.log
+*.tmp
+*.swp
+
+# IDEs e editores
+.vscode/
+.idea/
+*.iml
+.DS_Store
+
+# Arquivos do sistema
+Thumbs.db
+
+# Draw.io backups
+*.drawio~ 
