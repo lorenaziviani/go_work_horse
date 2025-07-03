@@ -1,0 +1,2 @@
+max_retries: 3
+delay_seconds: 5
