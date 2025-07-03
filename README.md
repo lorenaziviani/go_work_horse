@@ -37,6 +37,16 @@ A fila pode ser implementada usando Redis ou PostgreSQL. A escolha é feita via 
 - `created_at`: Data/hora de criação
 - `updated_at`: Data/hora de atualização
 
+## Configuração por ambiente
+
+Crie um arquivo `.env` baseado em `.env.example` para configurar:
+
+- `REDIS_ADDR`: endereço do Redis
+- `WORKER_COUNT`: número de workers concorrentes
+- `JOB_MAX_RETRIES`: tentativas máximas por job
+- `JOB_RETRY_DELAY`: delay base para retries (segundos)
+- `SIMULATE_FAIL`: simula falha para testar retries (1 = sim)
+
 ## Como rodar
 
 Em breve.

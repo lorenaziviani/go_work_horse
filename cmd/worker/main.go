@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -17,6 +18,11 @@ import (
 func processJob(job *jobqueue.Job) error {
 	start := time.Now()
 	// Simulate job processing
+	if os.Getenv("SIMULATE_FAIL") == "1" && job.RetryCount < 2 {
+		err := fmt.Errorf("simulated error on job %s", job.ID)
+		log.Printf("{\"job_id\":\"%s\",\"status\":\"failed\",\"duration_ms\":%d,\"error\":\"%s\",\"stack\":\"%s\"}", job.ID, time.Since(start).Milliseconds(), err.Error(), string(debug.Stack()))
+		return err
+	}
 	time.Sleep(2 * time.Second)
 	log.Printf("{\"job_id\":\"%s\",\"status\":\"completed\",\"duration_ms\":%d}", job.ID, time.Since(start).Milliseconds())
 	return nil
@@ -71,11 +77,28 @@ func main() {
 					}
 					job.Status = jobqueue.JobStatusRunning
 					start := time.Now()
+					maxRetries := job.MaxRetries
+					if maxRetries == 0 {
+						maxRetries = 3
+					}
+					retryDelay := job.RetryDelay
+					if retryDelay == 0 {
+						retryDelay = 5
+					}
 					err = processJob(job)
 					if err != nil {
 						job.Status = jobqueue.JobStatusFailed
+						job.LastError = err.Error()
+						job.RetryCount++
+						if job.RetryCount <= maxRetries {
+							backoff := time.Duration(retryDelay) * time.Second * time.Duration(1<<uint(job.RetryCount-1))
+							log.Printf("{\"job_id\":\"%s\",\"retry\":%d,\"backoff_seconds\":%d}", job.ID, job.RetryCount, int(backoff.Seconds()))
+							time.Sleep(backoff)
+							_ = queue.Enqueue(job)
+						}
 					} else {
 						job.Status = jobqueue.JobStatusSuccess
+						job.LastError = ""
 					}
 					job.UpdatedAt = time.Now()
 					dur := time.Since(start)

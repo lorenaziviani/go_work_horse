@@ -21,4 +21,7 @@ type Job struct {
 	ExecutedAt *time.Time `json:"executed_at,omitempty"`
 	CreatedAt  time.Time  `json:"created_at"`
 	UpdatedAt  time.Time  `json:"updated_at"`
+	RetryDelay int        `json:"retry_delay"` // in seconds
+	MaxRetries int        `json:"max_retries"`
+	LastError  string     `json:"last_error,omitempty"`
 }

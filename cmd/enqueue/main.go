@@ -20,11 +20,22 @@ func main() {
 	}
 	payload := os.Args[1]
 
+	maxRetries := 3
+	retryDelay := 5
+	if v := os.Getenv("JOB_MAX_RETRIES"); v != "" {
+		fmt.Sscanf(v, "%d", &maxRetries)
+	}
+	if v := os.Getenv("JOB_RETRY_DELAY"); v != "" {
+		fmt.Sscanf(v, "%d", &retryDelay)
+	}
+
 	job := jobqueue.Job{
 		ID:         uuid.NewString(),
 		Payload:    []byte(payload),
 		Status:     jobqueue.JobStatusPending,
 		RetryCount: 0,
+		MaxRetries: maxRetries,
+		RetryDelay: retryDelay,
 		CreatedAt:  time.Now(),
 		UpdatedAt:  time.Now(),
 	}
