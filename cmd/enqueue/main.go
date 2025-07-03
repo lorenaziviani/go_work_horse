@@ -11,7 +11,17 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 )
+
+var jobsEnqueued = prometheus.NewGauge(prometheus.GaugeOpts{
+	Name: "jobs_enqueued",
+	Help: "Number of jobs currently in the queue.",
+})
+
+func init() {
+	prometheus.MustRegister(jobsEnqueued)
+}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -49,6 +59,7 @@ func main() {
 		fmt.Println("Error enqueueing job:", err)
 		os.Exit(1)
 	}
+	jobsEnqueued.Inc()
 
 	b, _ := json.MarshalIndent(job, "", "  ")
 	fmt.Println("Job enqueued:")

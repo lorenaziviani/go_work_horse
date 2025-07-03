@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"os/signal"
 	"runtime/debug"
@@ -13,7 +14,44 @@ import (
 	"time"
 
 	"go_work_horse/pkg/jobqueue"
+
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/otel/sdk/trace"
+	"go.opentelemetry.io/otel/trace"
 )
+
+var (
+	jobsEnqueued = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "jobs_enqueued",
+		Help: "Number of jobs currently in the queue.",
+	})
+	jobsProcessed = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "jobs_processed_total",
+		Help: "Total number of jobs processed.",
+	})
+	jobsFailed = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "jobs_failed_total",
+		Help: "Total number of jobs failed.",
+	})
+	jobsRetried = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "jobs_retried_total",
+		Help: "Total number of job retries.",
+	})
+)
+
+func initMetrics() {
+	prometheus.MustRegister(jobsEnqueued, jobsProcessed, jobsFailed, jobsRetried)
+	go func() {
+		http.Handle("/metrics", promhttp.Handler())
+		http.ListenAndServe(":2112", nil)
+	}()
+}
+
+func initTracer() trace.Tracer {
+	exp, _ := trace.NewNoopTracerProvider().Tracer("go_work_horse")
+	return exp
+}
 
 func processJob(job *jobqueue.Job) error {
 	start := time.Now()
@@ -29,6 +67,8 @@ func processJob(job *jobqueue.Job) error {
 }
 
 func main() {
+	initMetrics()
+	tracer := initTracer()
 	cfg := jobqueue.LoadConfig()
 	workerCount := cfg.MaxRetries // Reusing max_retries as example, ideally create a specific config
 	if envWorkers := os.Getenv("WORKER_COUNT"); envWorkers != "" {
@@ -75,6 +115,8 @@ func main() {
 						time.Sleep(1 * time.Second)
 						continue
 					}
+					jobsEnqueued.Dec()
+					_, jobSpan := tracer.Start(ctx, "process-job")
 					job.Status = jobqueue.JobStatusRunning
 					start := time.Now()
 					maxRetries := job.MaxRetries
@@ -90,15 +132,19 @@ func main() {
 						job.Status = jobqueue.JobStatusFailed
 						job.LastError = err.Error()
 						job.RetryCount++
+						jobsFailed.Inc()
 						if job.RetryCount <= maxRetries {
+							jobsRetried.Inc()
 							backoff := time.Duration(retryDelay) * time.Second * time.Duration(1<<uint(job.RetryCount-1))
 							log.Printf("{\"job_id\":\"%s\",\"retry\":%d,\"backoff_seconds\":%d}", job.ID, job.RetryCount, int(backoff.Seconds()))
 							time.Sleep(backoff)
 							_ = queue.Enqueue(job)
+							jobsEnqueued.Inc()
 						}
 					} else {
 						job.Status = jobqueue.JobStatusSuccess
 						job.LastError = ""
+						jobsProcessed.Inc()
 					}
 					job.UpdatedAt = time.Now()
 					dur := time.Since(start)
@@ -110,6 +156,7 @@ func main() {
 						"updated_at":  job.UpdatedAt,
 					})
 					log.Println(string(b))
+					jobSpan.End()
 				}
 			}
 		}(i)

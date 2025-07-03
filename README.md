@@ -47,6 +47,62 @@ Crie um arquivo `.env` baseado em `.env.example` para configurar:
 - `JOB_RETRY_DELAY`: delay base para retries (segundos)
 - `SIMULATE_FAIL`: simula falha para testar retries (1 = sim)
 
+## Observabilidade
+
+O sistema expõe métricas Prometheus em `/metrics` (porta 2112 por padrão).
+
+Exemplo de scrape_config no Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: "go_work_horse"
+    static_configs:
+      - targets: ["localhost:2112"]
+```
+
+Métricas expostas:
+
+- `jobs_enqueued`: jobs atualmente na fila
+- `jobs_processed_total`: jobs processados com sucesso
+- `jobs_failed_total`: jobs com erro
+- `jobs_retried_total`: jobs reprocessados
+
+### Tracing
+
+O sistema está instrumentado com OpenTelemetry (pontos principais: dequeue, processamento, retry). Configure um collector OTLP ou Jaeger para visualizar traces.
+
+### Dashboard Grafana
+
+Você pode importar um dashboard Prometheus/Grafana para visualizar as métricas. Exemplo de painel:
+
+```json
+{
+  "title": "Go Work Horse Jobs",
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Jobs Enqueued",
+      "targets": [{ "expr": "jobs_enqueued" }]
+    },
+    {
+      "type": "stat",
+      "title": "Jobs Processed",
+      "targets": [{ "expr": "jobs_processed_total" }]
+    },
+    {
+      "type": "stat",
+      "title": "Jobs Failed",
+      "targets": [{ "expr": "jobs_failed_total" }]
+    },
+    {
+      "type": "stat",
+      "title": "Jobs Retried",
+      "targets": [{ "expr": "jobs_retried_total" }]
+    }
+  ]
+}
+```
+
 ## Como rodar
 
 Em breve.
