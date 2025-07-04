@@ -160,7 +160,7 @@ make help
 
 ### Grafana Dashboard
 
-Acesse [http://localhost:3000](http://localhost:3000) com **admin/admin123** para ver:
+Acesse [http://localhost:3000](http://localhost:3000) com **admin/admin** para ver:
 
 - Jobs enfileirados, processados, falhos e retries
 - Latência e duração dos jobs
