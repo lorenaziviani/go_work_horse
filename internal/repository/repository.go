@@ -1,6 +1,6 @@
 package repository
 
-import "../../pkg/jobqueue"
+import "go_work_horse/pkg/jobqueue"
 
 type Repository interface {
 	SaveJob(job *jobqueue.Job) error

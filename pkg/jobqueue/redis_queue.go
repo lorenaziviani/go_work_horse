@@ -40,3 +40,7 @@ func (q *RedisQueue) Dequeue() (*Job, error) {
 	}
 	return &job, nil
 }
+
+func (q *RedisQueue) Length() (int, error) {
+	return int(q.client.LLen(context.Background(), q.key).Val()), q.client.LLen(context.Background(), q.key).Err()
+}

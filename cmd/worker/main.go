@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime/debug"
 	"sync"
 	"syscall"
 	"time"
@@ -17,8 +16,12 @@ import (
 
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
-	"go.opentelemetry.io/otel/sdk/trace"
-	"go.opentelemetry.io/otel/trace"
+	otel "go.opentelemetry.io/otel"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
+	"go.opentelemetry.io/otel/sdk/resource"
+	tracesdk "go.opentelemetry.io/otel/sdk/trace"
+	semconv "go.opentelemetry.io/otel/semconv/v1.17.0"
+	oteltrace "go.opentelemetry.io/otel/trace"
 )
 
 var (
@@ -38,19 +41,56 @@ var (
 		Name: "jobs_retried_total",
 		Help: "Total number of job retries.",
 	})
+
+	jobsPending = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "jobs_pending",
+		Help: "Number of jobs with status pending.",
+	})
+	jobsRunning = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "jobs_running",
+		Help: "Number of jobs with status running.",
+	})
+	jobsSuccess = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "jobs_success",
+		Help: "Number of jobs with status success.",
+	})
+	jobsFailedGauge = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "jobs_failed_gauge",
+		Help: "Number of jobs with status failed.",
+	})
 )
 
 func initMetrics() {
-	prometheus.MustRegister(jobsEnqueued, jobsProcessed, jobsFailed, jobsRetried)
+	prometheus.MustRegister(jobsEnqueued, jobsProcessed, jobsFailed, jobsRetried, jobsPending, jobsRunning, jobsSuccess, jobsFailedGauge)
 	go func() {
-		http.Handle("/metrics", promhttp.Handler())
-		http.ListenAndServe(":2112", nil)
+		srv := &http.Server{
+			Addr:         ":2112",
+			Handler:      promhttp.Handler(),
+			ReadTimeout:  5 * time.Second,
+			WriteTimeout: 10 * time.Second,
+			IdleTimeout:  120 * time.Second,
+		}
+		if err := srv.ListenAndServe(); err != nil {
+			log.Fatalf("Error starting metrics server: %v", err)
+		}
 	}()
 }
 
-func initTracer() trace.Tracer {
-	exp, _ := trace.NewNoopTracerProvider().Tracer("go_work_horse")
-	return exp
+func initTracer() oteltrace.Tracer {
+	ctx := context.Background()
+	exp, err := otlptracehttp.New(ctx, otlptracehttp.WithEndpoint("jaeger:4318"), otlptracehttp.WithInsecure())
+	if err != nil {
+		log.Fatalf("Error creating OTLP exporter: %v", err)
+	}
+	tp := tracesdk.NewTracerProvider(
+		tracesdk.WithBatcher(exp),
+		tracesdk.WithResource(resource.NewWithAttributes(
+			semconv.SchemaURL,
+			semconv.ServiceNameKey.String("go_work_horse"),
+		)),
+	)
+	otel.SetTracerProvider(tp)
+	return tp.Tracer("go_work_horse")
 }
 
 func processJob(job *jobqueue.Job) error {
@@ -58,7 +98,7 @@ func processJob(job *jobqueue.Job) error {
 	// Simulate job processing
 	if os.Getenv("SIMULATE_FAIL") == "1" && job.RetryCount < 2 {
 		err := fmt.Errorf("simulated error on job %s", job.ID)
-		log.Printf("{\"job_id\":\"%s\",\"status\":\"failed\",\"duration_ms\":%d,\"error\":\"%s\",\"stack\":\"%s\"}", job.ID, time.Since(start).Milliseconds(), err.Error(), string(debug.Stack()))
+		log.Printf("{\"job_id\":\"%s\",\"status\":\"failed\",\"duration_ms\":%d,\"error\":\"%s\"}", job.ID, time.Since(start).Milliseconds(), err.Error())
 		return err
 	}
 	time.Sleep(2 * time.Second)
@@ -72,7 +112,9 @@ func main() {
 	cfg := jobqueue.LoadConfig()
 	workerCount := cfg.MaxRetries // Reusing max_retries as example, ideally create a specific config
 	if envWorkers := os.Getenv("WORKER_COUNT"); envWorkers != "" {
-		fmt.Sscanf(envWorkers, "%d", &workerCount)
+		if _, err := fmt.Sscanf(envWorkers, "%d", &workerCount); err != nil {
+			fmt.Printf("Error converting WORKER_COUNT: %v\n", err)
+		}
 	}
 	if workerCount <= 0 {
 		workerCount = 5
@@ -83,6 +125,17 @@ func main() {
 		redisAddr = "localhost:6379"
 	}
 	queue := jobqueue.NewRedisQueue(redisAddr, "", 0, "jobs")
+
+	// Update jobsEnqueued metric with the real size of the Redis queue every 2s
+	go func() {
+		for {
+			size, err := queue.Length()
+			if err == nil {
+				jobsEnqueued.Set(float64(size))
+			}
+			time.Sleep(2 * time.Second)
+		}
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -115,9 +168,10 @@ func main() {
 						time.Sleep(1 * time.Second)
 						continue
 					}
-					jobsEnqueued.Dec()
 					_, jobSpan := tracer.Start(ctx, "process-job")
 					job.Status = jobqueue.JobStatusRunning
+					jobsPending.Dec()
+					jobsRunning.Inc()
 					start := time.Now()
 					maxRetries := job.MaxRetries
 					if maxRetries == 0 {
@@ -133,18 +187,29 @@ func main() {
 						job.LastError = err.Error()
 						job.RetryCount++
 						jobsFailed.Inc()
+						jobsRunning.Dec()
+						jobsFailedGauge.Inc()
 						if job.RetryCount <= maxRetries {
 							jobsRetried.Inc()
-							backoff := time.Duration(retryDelay) * time.Second * time.Duration(1<<uint(job.RetryCount-1))
+							maxShift := 20
+							shift := job.RetryCount - 1
+							if shift > maxShift {
+								shift = maxShift
+							}
+							if shift < 0 {
+								shift = 0
+							}
+							backoff := time.Duration(retryDelay) * time.Second * time.Duration(1<<shift)
 							log.Printf("{\"job_id\":\"%s\",\"retry\":%d,\"backoff_seconds\":%d}", job.ID, job.RetryCount, int(backoff.Seconds()))
 							time.Sleep(backoff)
 							_ = queue.Enqueue(job)
-							jobsEnqueued.Inc()
 						}
 					} else {
 						job.Status = jobqueue.JobStatusSuccess
 						job.LastError = ""
 						jobsProcessed.Inc()
+						jobsRunning.Dec()
+						jobsSuccess.Inc()
 					}
 					job.UpdatedAt = time.Now()
 					dur := time.Since(start)

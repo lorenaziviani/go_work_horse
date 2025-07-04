@@ -1,5 +1,5 @@
-// Para buildar: go build -o enqueue main.go
-// Uso: REDIS_ADDR=localhost:6379 ./enqueue '{"foo":"bar"}'
+// To build: go build -o enqueue main.go
+// Usage: REDIS_ADDR=localhost:6379 ./enqueue '{"foo":"bar"}'
 
 package main
 
@@ -33,10 +33,14 @@ func main() {
 	maxRetries := 3
 	retryDelay := 5
 	if v := os.Getenv("JOB_MAX_RETRIES"); v != "" {
-		fmt.Sscanf(v, "%d", &maxRetries)
+		if _, err := fmt.Sscanf(v, "%d", &maxRetries); err != nil {
+			fmt.Printf("Error converting JOB_MAX_RETRIES: %v\n", err)
+		}
 	}
 	if v := os.Getenv("JOB_RETRY_DELAY"); v != "" {
-		fmt.Sscanf(v, "%d", &retryDelay)
+		if _, err := fmt.Sscanf(v, "%d", &retryDelay); err != nil {
+			fmt.Printf("Error converting JOB_RETRY_DELAY: %v\n", err)
+		}
 	}
 
 	job := jobqueue.Job{
@@ -59,7 +63,6 @@ func main() {
 		fmt.Println("Error enqueueing job:", err)
 		os.Exit(1)
 	}
-	jobsEnqueued.Inc()
 
 	b, _ := json.MarshalIndent(job, "", "  ")
 	fmt.Println("Job enqueued:")
