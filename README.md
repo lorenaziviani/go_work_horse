@@ -1,4 +1,4 @@
-# 🐎 GoWorkhorse - Job Engine Assíncrono em Go
+# ⚙️  GoWorkhorse - Job Engine Assíncrono em Go
 
 <div align="center">
 <img src=".gitassets/cover.png" width="350" />
